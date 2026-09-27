@@ -1,42 +1,30 @@
-# Contrat de développement — Atlas2
+# Contribuer à Atlas2
 
-Atlas accompagne une réunion depuis une seule application : capture audio ou saisie
-texte, recherches, notes et engagements. Le dépôt et le package Python restent
-nommés Aparté.
-Projet du hackathon X-IA, Rise of Agents X.
+Suivre le [README](README.md) pour installer et lancer le projet.
 
-## Développement
+## Règles de développement
 
-- Python 3.12 ou supérieur ; package `src/aparte`, commande `uv run aparte`.
-- Dépendances gérées par `uv` et `uv.lock` ; pas de `pip` global.
-- Contrôles : `uv run --locked python scripts/project.py check`. Tests seuls : `uv run pytest -p no:cacheprovider`. Style : `uv run ruff check src tests scripts` et
-  `uv run ruff format --check src tests scripts`.
-- Conserver les auteurs dans les métadonnées et documenter les inspirations.
+- Garder une application et un moteur de session uniques.
+- Séparer interface, transport, orchestration, fournisseurs et stockage.
+- Gérer les dépendances avec uv et Bun ; mettre à jour leurs fichiers de verrouillage.
+- Demander l’accord avant la capture. Une pause doit arrêter l’écoute et les travaux.
+- Garder les citations consultables et faire valider les engagements avant export.
+- Afficher les erreurs des fournisseurs ; réserver les réponses fictives aux tests.
+- Préserver les sessions existantes et couvrir les corrections fonctionnelles par des tests.
+- Garder les clés et les données de réunion hors de Git, du frontend et des journaux.
+- Créditer le code et les ressources réutilisés dans [ATTRIBUTIONS.md](ATTRIBUTIONS.md).
 
-## Architecture
+## Avant un push
 
-- Un frontend React, une API FastAPI et un moteur `WorkspaceEngine` issu d’Atlas.
-- Séparer transport, orchestration, recherche, fournisseurs et persistance.
-- Le routage TypeSafe (avec repli sur le modèle configuré) oriente les
-  interventions ; réponse et recherches peuvent travailler en parallèle.
-- Vérifier la pertinence avant de parler ; respecter le tour humain,
-  les interruptions et l'obsolescence des résultats.
-- OpenAI : conversation, planification et recherche web ; Gradium : écoute et voix.
-- Dust : recherche documentaire interne ; Pipelex : comparaison structurée.
-- Les outils restent choisis selon le besoin, sans appel artificiel à un fournisseur.
-- Les échecs d'API restent visibles ; aucun résultat simulé ne remplace une erreur
-  dans une session réelle. Les données fictives sont réservées aux tests isolés.
-- Les connecteurs Google Meet, Teams et Zoom ne sont pas encore implémentés.
+```sh
+uv run --locked python scripts/project.py check
+```
 
-## Données locales
+Si les messages de l’API changent, régénérer le contrat avant ce contrôle :
 
-- `.env` et `.Secrets` sont locaux, ignorés par Git et chargés par `AppSettings`.
-- Seul `.env.example`, sans identifiants réels, est destiné à être versionné.
-- Ne jamais exposer les clés au navigateur ou dans les journaux.
-- Les transcriptions nécessaires sont transmises aux fournisseurs utilisés ;
-  aucune vidéo n'est envoyée aux modèles. La transcription, les notes et les
-  actions sont enregistrées dans SQLite ; aucun audio brut n'y est conservé.
-- Contrôle avant publication : `uv run python scripts/check_secret_hygiene.py`.
+```sh
+uv run --locked python scripts/export_workspace_protocol.py
+bun run --cwd frontend generate:protocol
+```
 
-Voir [l'architecture](ARCHITECTURE.md), les [limites de validation](docs/ameliorations-fiabilite.md)
-et le [dossier hackathon](docs/EVALUATION.md).
+Pour travailler sur l’interface, lancer le backend puis `bun run --cwd frontend dev`. Le frontend est accessible sur http://127.0.0.1:5173/.
