@@ -32,9 +32,8 @@ def serve():
     class SyntheticDecision(FakeDecision):
         async def evaluate(self, state, text):
             route = "investigate" if text.startswith("Atlas, recherche") else "capture"
-            return await FakeDecision(route, initiative="proactive").evaluate(
-                state, text
-            )
+            # An explicit request assigns a mission and authorizes its report.
+            return await FakeDecision(route).evaluate(state, text)
 
     class SyntheticGenerator(FakeGenerator):
         async def generate(self, messages, model_id=None):
