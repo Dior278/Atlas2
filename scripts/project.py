@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,7 +65,20 @@ def doctor() -> None:
 
 
 def check() -> None:
-    run("uv", "run", "--locked", "pytest", "-q", "-p", "no:cacheprovider")
+    (ROOT / "tmp").mkdir(exist_ok=True)
+    # Own the test scratch directory; never depend on another checkout's temp ACLs.
+    with tempfile.TemporaryDirectory(prefix="pytest-", dir=ROOT / "tmp") as temporary:
+        run(
+            "uv",
+            "run",
+            "--locked",
+            "pytest",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            "--basetemp",
+            str(Path(temporary) / "cases"),
+        )
     run("uv", "run", "--locked", "ruff", "check", "src", "tests", "scripts")
     run("uv", "run", "--locked", "ruff", "format", "--check", "src", "tests", "scripts")
     run("bun", "run", "--cwd", "frontend", "format:check")

@@ -23,6 +23,19 @@ class AppSettings(BaseSettings):
     pipelex_api_key: SecretStr = SecretStr("")
     typesafe_api_key: SecretStr = SecretStr("")
 
+    @field_validator("gradium_stt_delay_frames", mode="before")
+    @classmethod
+    def parse_gradium_stt_delay_frames(cls, value):
+        # Environment and dotenv values arrive as strings. Literal[int] validates
+        # membership but does not coerce them as an ordinary int field would.
+        if (
+            isinstance(value, str)
+            and value.strip().isascii()
+            and value.strip().isdigit()
+        ):
+            return int(value.strip())
+        return value
+
     @field_validator("dust_domain")
     @classmethod
     def validate_dust_domain(cls, value: str) -> str:

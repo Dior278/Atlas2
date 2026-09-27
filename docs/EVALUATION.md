@@ -32,6 +32,27 @@ le fonctionnement du logiciel, sans démontrer la qualité des modèles réels.
 
 ## Vérifications et intégration continue
 
+Validation locale du 27 septembre 2026, sous Windows avec Python 3.12.9 :
+
+- installation verrouillée et compilation depuis une archive extraite, sans clés
+  ni dépendances préinstallées dans ce dossier ;
+- **146 tests Python et 23 tests frontend réussis**, Ruff, Prettier, TypeScript,
+  build, cohérence du protocole et contrôle des sources réussis ;
+- parcours Chromium réussi aux quatre largeurs, aucune erreur JavaScript ;
+- démarrage du cycle serveur sans clé et réponses HTTP 200 pour l’interface,
+  la santé, le bootstrap et le protocole ; bibliothèque initialement vide.
+
+Ce contrôle a corrigé un défaut de première installation : la valeur numérique
+`GRADIUM_STT_DELAY_FRAMES` du fichier d’exemple est maintenant convertie avant sa
+validation. Les valeurs non prises en charge restent refusées. Les fichiers
+temporaires et le serveur du test navigateur sont fermés et nettoyés en fin de test.
+
+Un avertissement de dépréciation Starlette/httpx subsiste dans les tests Python ;
+il n’entraîne pas d’échec. Les fournisseurs réels n’ont pas été rappelés pour cette
+remise ; les vérifications précédentes sont décrites dans
+[le rapport de fiabilité](ameliorations-fiabilite.md). Le partage audio dans un
+appel externe et l’exécution de la CI distante restent à vérifier dans ces environnements.
+
 `uv run --locked python scripts/project.py check` exécute les contrôles du dépôt.
 Le workflow [Quality](../.github/workflows/quality.yml) reprend ces contrôles et
 le parcours Chromium sur Linux à chaque push et pull request, sans secret API.
@@ -88,6 +109,8 @@ les attributions gardent les informations nécessaires à l’évaluation.
 
 Les exécutables portables et sauvegardes restent locaux pour préserver le poste
 de travail. Les caches ne sont pas des sources et ne sont jamais remis au jury.
+Les clones temporaires utilisés pour la comparaison amont et les anciennes bases
+du navigateur de test ont également été supprimés.
 
 ## Références techniques
 

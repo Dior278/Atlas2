@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -130,7 +131,19 @@ def serve():
         )
 
     api.compose = compose
-    uvicorn.run(api.create_app(), host="127.0.0.1", port=PORT, log_level="warning")
+    server = uvicorn.Server(
+        uvicorn.Config(
+            api.create_app(), host="127.0.0.1", port=PORT, log_level="warning"
+        )
+    )
+
+    def stop_on_parent_exit():
+        sys.stdin.read()
+        server.should_exit = True
+
+    # EOF is portable and lets lifespan close SQLite before Windows removes it.
+    threading.Thread(target=stop_on_parent_exit, daemon=True).start()
+    server.run()
 
 
 def check_tab_audio(playwright, base_url):
@@ -235,6 +248,7 @@ def check(tab_audio=False):
             },
             stdout=log,
             stderr=log,
+            stdin=subprocess.PIPE,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         try:
@@ -472,11 +486,20 @@ def check(tab_audio=False):
                 print(json.dumps(report))
                 browser.close()
         finally:
-            process.terminate()
+            process.stdin.close()
             try:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                process.kill()
+                if os.name == "nt":
+                    # The Windows venv launcher has a child interpreter.
+                    subprocess.run(
+                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+                else:
+                    process.kill()
                 process.wait(timeout=10)
 
 
