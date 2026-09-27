@@ -38,6 +38,11 @@ class TypeSafeDecision:
                     {"speaker": item.speaker, "text": item.text}
                     for item in state.transcript[-12:]
                 ],
+                "recent_speech": [
+                    {"text": item.text, "status": item.status}
+                    for item in state.speeches[-5:]
+                    if item.status in {"finished", "interrupted"}
+                ],
                 "shared_memory": state.notes_document.model_dump(mode="json"),
                 "tasks": [
                     {

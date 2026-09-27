@@ -5,7 +5,7 @@ import pytest
 
 from aparte.workspace.adapters.typesafe import TypeSafeDecision
 from aparte.workspace.config import DecisionConfig
-from aparte.workspace.core.models import AtlasState, Decision
+from aparte.workspace.core.models import AtlasState, Decision, Speech
 
 
 @pytest.mark.asyncio
@@ -19,6 +19,8 @@ async def test_semantic_router_returns_coherent_addressee_initiative_memory_and_
         assert '"memory"' in payload
         assert "speech_depth" in payload
         assert "initiative" in payload
+        assert "Réponse déjà entendue" in payload
+        assert "Brouillon à ne pas confondre" not in payload
         return httpx.Response(
             200,
             json={
@@ -44,7 +46,22 @@ async def test_semantic_router_returns_coherent_addressee_initiative_memory_and_
         transport,
     )
     result = await decision.evaluate(
-        AtlasState(project_id="atlas", protocol_version=1),
+        AtlasState(
+            project_id="atlas",
+            protocol_version=1,
+            speeches=[
+                Speech(
+                    text="Réponse déjà entendue",
+                    reason="direct_address",
+                    status="finished",
+                ),
+                Speech(
+                    text="Brouillon à ne pas confondre",
+                    reason="direct_address",
+                    status="waiting_gap",
+                ),
+            ],
+        ),
         "Could you investigate this for the room?",
     )
     assert result.route == "investigate"

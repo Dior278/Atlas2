@@ -9,6 +9,8 @@ Ouvrir Atlas2 et la réunion dans deux onglets de Chrome ou Edge. Utiliser un ca
 3. Dans **••• → Faire entendre Atlas dans l’appel**, jouer le son de test et demander à un participant de confirmer sa réception.
 4. Faire parler un participant, vérifier sa transcription, puis demander une courte réponse à Atlas.
 
+**Teams dans le navigateur :** Partager → Écran, fenêtre ou onglet → Onglet → Atlas2, puis activer **Partager aussi l’audio de l’onglet**. Le son entendu sur votre poste ne confirme pas sa réception dans l’appel.
+
 Le partage audio dépend de la plateforme : [Google Meet](https://support.google.com/meet/answer/9308856?hl=fr), [Teams](https://support.microsoft.com/en-us/teams/meetings/share-sound-from-your-computer-in-microsoft-teams-meetings-or-live-events), [Zoom](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0063608). Préférer la version web pour isoler le son de la réunion. En cas d’écho, mettre en pause et vérifier les sources audio.
 
 ## Scénario vidéo

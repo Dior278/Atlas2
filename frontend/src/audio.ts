@@ -9,7 +9,7 @@ export class AudioBridge {
   private context?: AudioContext;
   private streams: MediaStream[] = [];
   private processor?: ScriptProcessorNode;
-  private floorProcessor?: ScriptProcessorNode;
+  private floorProcessors: ScriptProcessorNode[] = [];
   private playback?: AudioBufferSourceNode;
   private streamSources = new Set<AudioBufferSourceNode>();
   private streamNextTime = 0;
@@ -22,9 +22,12 @@ export class AudioBridge {
   };
   private cueRequest = 0;
   private playbackActive = false;
-  private voicedFrames = 0;
+  private playbackGeneration = 0;
+  private floorSources = new Map<
+    string,
+    { voiced: number; busy: boolean; lastEnergy: number }
+  >();
   private floorBusy = false;
-  private lastEnergyAt = 0;
   private pcmPending = new Int16Array(0);
   private captureGeneration = 0;
 
@@ -53,6 +56,7 @@ export class AudioBridge {
       let system = false;
       let microphoneStream: MediaStream | undefined;
       let systemStream: MediaStream | undefined;
+      let sharedTab = false;
       if (mode === "microphone" || mode === "mixed") {
         microphoneStream = await navigator.mediaDevices.getUserMedia({
           audio: {
@@ -77,6 +81,9 @@ export class AudioBridge {
             selfBrowserSurface: "exclude",
           } as DisplayMediaStreamOptions);
           ensureCurrent(display);
+          sharedTab =
+            display.getVideoTracks()[0]?.getSettings?.().displaySurface ===
+            "browser";
           for (const track of display.getVideoTracks()) track.stop();
           if (display.getAudioTracks().length === 0) {
             display.getTracks().forEach((track) => track.stop());
@@ -113,17 +120,24 @@ export class AudioBridge {
       this.processor.onaudioprocess = (event) =>
         this.processPcm(event.inputBuffer.getChannelData(0));
 
-      const floorStream = microphoneStream;
-      if (floorStream) {
+      for (const [source, floorStream] of [
+        ["microphone", microphoneStream],
+        ["system", systemStream],
+      ] as const) {
+        if (!floorStream) continue;
         const floorSource = this.context.createMediaStreamSource(floorStream);
-        this.floorProcessor = this.context.createScriptProcessor(2048, 1, 1);
+        const floorProcessor = this.context.createScriptProcessor(2048, 1, 1);
+        this.floorProcessors.push(floorProcessor);
         const silentFloor = this.context.createGain();
         silentFloor.gain.value = 0;
-        floorSource.connect(this.floorProcessor);
-        this.floorProcessor.connect(silentFloor);
+        floorSource.connect(floorProcessor);
+        floorProcessor.connect(silentFloor);
         silentFloor.connect(this.context.destination);
-        this.floorProcessor.onaudioprocess = (event) => {
-          this.processFloor(event.inputBuffer.getChannelData(0));
+        floorProcessor.onaudioprocess = (event) => {
+          // Whole-system capture can contain Atlas itself. A separate meeting
+          // tab is isolated and can interrupt Atlas even during playback.
+          if (source === "system" && this.playbackActive && !sharedTab) return;
+          this.processFloor(event.inputBuffer.getChannelData(0), source);
         };
       }
       await this.context.resume();
@@ -144,8 +158,9 @@ export class AudioBridge {
     this.stopPlayback();
     this.processor?.disconnect();
     this.processor = undefined;
-    this.floorProcessor?.disconnect();
-    this.floorProcessor = undefined;
+    for (const processor of this.floorProcessors) processor.disconnect();
+    this.floorProcessors = [];
+    this.floorSources.clear();
     for (const stream of this.streams)
       stream.getTracks().forEach((track) => track.stop());
     this.streams = [];
@@ -164,6 +179,7 @@ export class AudioBridge {
     sampleRate: number,
   ): Promise<void> {
     this.stopPlayback();
+    const generation = this.playbackGeneration;
     const bytes = Uint8Array.from(atob(base64), (character) =>
       character.charCodeAt(0),
     );
@@ -184,19 +200,23 @@ export class AudioBridge {
         bytes.buffer.slice(0) as ArrayBuffer,
       );
     }
-    this.playback = context.createBufferSource();
-    this.playback.buffer = buffer;
-    this.playback.connect(context.destination);
+    if (generation !== this.playbackGeneration) return;
+    if (this.floorBusy) throw new Error("Participant speaking");
+    const source = context.createBufferSource();
+    this.playback = source;
+    source.buffer = buffer;
+    source.connect(context.destination);
     await new Promise<void>((resolve) => {
-      if (!this.playback) return resolve();
       this.playbackActive = true;
-      this.playback.onended = () => {
-        this.playbackActive = false;
+      source.onended = () => {
+        if (generation === this.playbackGeneration) {
+          this.playbackActive = false;
+        }
         resolve();
       };
-      this.playback.start();
+      source.start();
     });
-    this.playback = undefined;
+    if (this.playback === source) this.playback = undefined;
   }
 
   async beginPcmStream(): Promise<void> {
@@ -213,6 +233,10 @@ export class AudioBridge {
       this.streamResolve = resolve;
     });
     await context.resume();
+  }
+
+  get participantSpeaking(): boolean {
+    return this.floorBusy;
   }
 
   pushPcmChunk(base64: string, sampleRate: number): void {
@@ -334,6 +358,7 @@ export class AudioBridge {
   }
 
   stopPlayback(): void {
+    this.playbackGeneration += 1;
     this.stopCue();
     this.playbackActive = false;
     if (this.playback) {
@@ -366,31 +391,37 @@ export class AudioBridge {
     this.streamPromise = undefined;
   }
 
-  private processFloor(input: Float32Array): void {
+  private processFloor(input: Float32Array, source: string): void {
     if (!this.context) return;
     let energy = 0;
     for (const sample of input) energy += sample * sample;
     const rms = Math.sqrt(energy / input.length);
     this.onLevel(Math.min(1, rms / 0.12));
     const now = performance.now();
-    const threshold = this.playbackActive ? 0.08 : 0.018;
-    const requiredFrames = this.playbackActive ? 6 : 2;
+    const state = this.floorSources.get(source) ?? {
+      voiced: 0,
+      busy: false,
+      lastEnergy: 0,
+    };
+    this.floorSources.set(source, state);
+    const guardMicrophoneEcho = this.playbackActive && source === "microphone";
+    const threshold = guardMicrophoneEcho ? 0.08 : 0.018;
+    const requiredFrames = guardMicrophoneEcho ? 6 : 2;
     if (rms > threshold) {
-      this.voicedFrames += 1;
-      this.lastEnergyAt = now;
-      if (this.voicedFrames >= requiredFrames && !this.floorBusy) {
-        const interruptedPlayback = this.playbackActive;
-        this.setFloor(true);
-        if (interruptedPlayback) {
-          this.stopPlayback();
-          this.onBargeIn();
-        }
-      }
-    } else if (this.floorBusy && now - this.lastEnergyAt > 650) {
-      this.voicedFrames = 0;
-      this.setFloor(false);
+      state.voiced += 1;
+      state.lastEnergy = now;
+      if (state.voiced >= requiredFrames) state.busy = true;
+    } else if (state.busy && now - state.lastEnergy > 650) {
+      state.voiced = 0;
+      state.busy = false;
     } else {
-      this.voicedFrames = 0;
+      state.voiced = 0;
+    }
+    const busy = [...this.floorSources.values()].some((item) => item.busy);
+    this.setFloor(busy);
+    if (busy && this.playbackActive) {
+      this.stopPlayback();
+      this.onBargeIn();
     }
   }
 

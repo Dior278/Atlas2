@@ -38,8 +38,9 @@ class SessionConfig(StrictModel):
 
 
 class PolicyConfig(StrictModel):
-    stable_floor_gap_seconds: float = Field(default=0.8, ge=0)
-    direct_floor_gap_seconds: float = Field(default=0.3, ge=0)
+    stable_floor_gap_seconds: float = Field(default=1.5, ge=0)
+    direct_floor_gap_seconds: float = Field(default=0.8, ge=0)
+    awaited_floor_gap_seconds: float = Field(default=3.0, ge=0)
     unsolicited_speech_cooldown_seconds: float = Field(default=90, ge=0)
     research_max_concurrency: int = Field(default=3, ge=1, le=16)
     max_tool_steps: int = Field(default=4, ge=1, le=16)

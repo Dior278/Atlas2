@@ -44,10 +44,82 @@ function stream(
   } as unknown as MediaStream;
 }
 
+class PlaybackNode extends FakeNode {
+  buffer?: AudioBuffer;
+  onended?: () => void;
+  start = vi.fn();
+  stop = vi.fn();
+}
+
+class PlaybackContext extends FakeContext {
+  static sources: PlaybackNode[] = [];
+  static decode = vi.fn();
+  decodeAudioData = PlaybackContext.decode;
+  createBuffer() {
+    return {
+      getChannelData: () => new Float32Array(1),
+    } as unknown as AudioBuffer;
+  }
+  createBufferSource() {
+    const source = new PlaybackNode();
+    PlaybackContext.sources.push(source);
+    return source;
+  }
+}
+
+describe("AudioBridge playback lifecycle", () => {
+  beforeEach(() => {
+    PlaybackContext.sources = [];
+    PlaybackContext.decode = vi.fn();
+    vi.stubGlobal("AudioContext", PlaybackContext);
+  });
+
+  it("does not start decoded audio after playback was stopped", async () => {
+    let decoded!: (buffer: AudioBuffer) => void;
+    PlaybackContext.decode.mockImplementation(
+      () =>
+        new Promise<AudioBuffer>((resolve) => {
+          decoded = resolve;
+        }),
+    );
+    const bridge = new AudioBridge(vi.fn(), vi.fn(), vi.fn(), vi.fn());
+    const pending = bridge.playAudio("AAA=", "opus", 24000);
+    bridge.stopPlayback();
+    decoded({} as AudioBuffer);
+    await Promise.resolve();
+    try {
+      expect(PlaybackContext.sources).toHaveLength(0);
+    } finally {
+      for (const source of PlaybackContext.sources) source.onended?.();
+      await pending;
+    }
+  });
+
+  it("keeps control of the new audio when the old source ends late", async () => {
+    const bridge = new AudioBridge(vi.fn(), vi.fn(), vi.fn(), vi.fn());
+    const first = bridge.playAudio("AAA=", "pcm_24000", 24000);
+    const oldSource = PlaybackContext.sources[0];
+    const second = bridge.playAudio("AAA=", "pcm_24000", 24000);
+    const newSource = PlaybackContext.sources[1];
+    oldSource.onended?.();
+    await first;
+    bridge.stopPlayback();
+    try {
+      expect(newSource.stop).toHaveBeenCalledOnce();
+    } finally {
+      newSource.onended?.();
+      await second;
+    }
+  });
+});
+
 describe("AudioBridge capture", () => {
   const microphoneTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
   const systemTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
-  const videoTrack = { stop: vi.fn() } as unknown as MediaStreamTrack;
+  const videoTrack = {
+    stop: vi.fn(),
+    getSettings: () => ({ displaySurface: "browser" }),
+  } as unknown as MediaStreamTrack;
   const getUserMedia = vi.fn();
   const getDisplayMedia = vi.fn();
 
@@ -118,7 +190,7 @@ describe("AudioBridge capture", () => {
     expect(getDisplayMedia).not.toHaveBeenCalled();
   });
 
-  it("uses microphone energy for barge-in while mixed system audio remains STT-only", async () => {
+  it("detects participants from both microphone and shared meeting tab", async () => {
     const onFloor = vi.fn();
     const bridge = new AudioBridge(vi.fn(), onFloor, vi.fn(), vi.fn());
     await bridge.start("mixed");
@@ -133,6 +205,90 @@ describe("AudioBridge capture", () => {
     floorProcessor.onaudioprocess?.(event);
     floorProcessor.onaudioprocess?.(event);
     expect(onFloor).toHaveBeenCalledWith(true);
+    await bridge.stopCapture();
+  });
+
+  it.each(["mixed", "system"] as const)(
+    "interrupts Atlas for a remote participant in %s mode",
+    async (mode) => {
+      const onFloor = vi.fn();
+      const onBargeIn = vi.fn();
+      const bridge = new AudioBridge(vi.fn(), onFloor, vi.fn(), onBargeIn);
+      await bridge.start(mode);
+      Object.defineProperty(bridge, "playbackActive", {
+        value: true,
+        writable: true,
+      });
+      const remote = FakeContext.processors.at(-1)!;
+      const event = {
+        inputBuffer: {
+          getChannelData: () => new Float32Array(2048).fill(0.04),
+        },
+      } as unknown as AudioProcessingEvent;
+      remote.onaudioprocess?.(event);
+      remote.onaudioprocess?.(event);
+      expect(onFloor).toHaveBeenLastCalledWith(true);
+      expect(onBargeIn).toHaveBeenCalledOnce();
+      expect(bridge.participantSpeaking).toBe(true);
+      await bridge.stopCapture();
+    },
+  );
+
+  it("keeps the floor occupied while either participant is still speaking", async () => {
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
+    try {
+      const onFloor = vi.fn();
+      const bridge = new AudioBridge(vi.fn(), onFloor, vi.fn(), vi.fn());
+      await bridge.start("mixed");
+      const [, microphone, remote] = FakeContext.processors;
+      const event = (level: number) =>
+        ({
+          inputBuffer: {
+            getChannelData: () => new Float32Array(2048).fill(level),
+          },
+        }) as unknown as AudioProcessingEvent;
+      microphone.onaudioprocess?.(event(0.1));
+      microphone.onaudioprocess?.(event(0.1));
+      remote.onaudioprocess?.(event(0.1));
+      remote.onaudioprocess?.(event(0.1));
+      now.mockReturnValue(800);
+      remote.onaudioprocess?.(event(0.1));
+      microphone.onaudioprocess?.(event(0));
+      expect(onFloor.mock.calls).toEqual([[true]]);
+      now.mockReturnValue(1500);
+      remote.onaudioprocess?.(event(0));
+      expect(onFloor.mock.calls).toEqual([[true], [false]]);
+      await bridge.stopCapture();
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("does not mistake Atlas in whole-system capture for a remote interruption", async () => {
+    getDisplayMedia.mockResolvedValue(
+      stream(
+        [systemTrack],
+        [
+          {
+            stop: vi.fn(),
+            getSettings: () => ({ displaySurface: "monitor" }),
+          } as unknown as MediaStreamTrack,
+        ],
+      ),
+    );
+    const onBargeIn = vi.fn();
+    const bridge = new AudioBridge(vi.fn(), vi.fn(), vi.fn(), onBargeIn);
+    await bridge.start("system");
+    Object.defineProperty(bridge, "playbackActive", {
+      value: true,
+      writable: true,
+    });
+    const event = {
+      inputBuffer: { getChannelData: () => new Float32Array(2048).fill(0.2) },
+    } as unknown as AudioProcessingEvent;
+    for (let i = 0; i < 8; i++)
+      FakeContext.processors[1].onaudioprocess?.(event);
+    expect(onBargeIn).not.toHaveBeenCalled();
     await bridge.stopCapture();
   });
 

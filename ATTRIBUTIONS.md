@@ -11,8 +11,8 @@ Le socle Atlas ne comporte pas de licence explicite dans la version intégrée. 
 ## Auteurs
 
 - KAMDEM POUOKAM Ivann Harold
-- Dehayem Kenfouo Sylvain
-- Wadoh Tchinda Pavel
+- DEHAYEM KENFOUO Sylvain
+- WADOH TCHINDA Pavel
 
 Les contributions du dépôt Atlas restent attribuées à leurs auteurs. Le développement et les tests ont bénéficié d’une assistance IA.
 

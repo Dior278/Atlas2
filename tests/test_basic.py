@@ -21,7 +21,7 @@ def test_published_environment_example_is_loadable(monkeypatch):
     monkeypatch.delenv("GRADIUM_STT_DELAY_FRAMES", raising=False)
     example = Path(__file__).resolve().parents[1] / ".env.example"
     settings = AppSettings(_env_file=example)
-    assert settings.gradium_stt_delay_frames == 12
+    assert settings.gradium_stt_delay_frames == 16
 
 
 def test_gradium_delay_accepts_environment_string(monkeypatch):

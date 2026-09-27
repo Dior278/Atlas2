@@ -698,7 +698,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "direct_address" | "requested_result" | "critical_finding";
+            reason: "direct_address" | "awaited_response" | "requested_result" | "critical_finding";
             /**
              * Status
              * @default proposed

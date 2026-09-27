@@ -36,6 +36,8 @@ flowchart TD
 
 `WorkspaceEngine` étend le moteur Atlas. TypeSafe assure le routage lorsqu’il est configuré ; sinon, le modèle prend le relais. OpenAI traite la conversation et les recherches, Gradium la voix. Les autres outils sont activés selon la configuration.
 
+Le navigateur surveille séparément le microphone et l’onglet de réunion pour céder la parole aux participants. Une invitation ou une question adressée à Atlas autorise une réponse après la fin du tour. Une aide clairement attendue par le groupe autorise une réponse brève après trois secondes de silence continu, annulée si quelqu’un reprend. Une pause seule ne suffit pas. Les interventions spontanées sont espacées d’au moins 90 secondes ; les demandes explicites restent possibles.
+
 ## Mémoire et configuration
 
 - L’état actif contient la transcription, les notes, les cartes et les tâches.

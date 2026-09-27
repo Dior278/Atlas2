@@ -213,14 +213,19 @@ export function useAtlas() {
       } else if (message.type === "transcript.partial")
         setPartial(message.text);
       else if (message.type === "speech.stop") {
-        audio.stopPlayback();
-        setSubtitle("");
-        streamStartedRef.current = false;
-        if (activeSpeechRef.current === message.speech_id)
+        if (activeSpeechRef.current === message.speech_id) {
+          audio.stopPlayback();
+          setSubtitle("");
+          streamStartedRef.current = false;
           activeSpeechRef.current = null;
+        }
         speechStartedAt.delete(message.speech_id);
         pendingSubtitles.delete(message.speech_id);
       } else if (message.type === "speech.authorized") {
+        if (activeSpeechRef.current !== message.speech_id) {
+          audio.stopPlayback();
+          streamStartedRef.current = false;
+        }
         void playSpeech(socket, audio, message, activeSpeechRef, () =>
           setSubtitle(""),
         );
@@ -234,6 +239,10 @@ export function useAtlas() {
         }
       } else if (message.type === "speech.audio.chunk") {
         if (activeSpeechRef.current === message.speech_id) {
+          if (audio.participantSpeaking) {
+            interruptPlayback();
+            return;
+          }
           if (!streamStartedRef.current) {
             streamStartedRef.current = true;
             void audio.beginPcmStream();
@@ -509,6 +518,13 @@ async function playSpeech(
   activeSpeech: { current: string | null },
   onFinished: () => void,
 ): Promise<void> {
+  if (audio.participantSpeaking) {
+    send(socket, {
+      type: "playback.interrupted",
+      speech_id: message.speech_id,
+    });
+    return;
+  }
   activeSpeech.current = message.speech_id;
   try {
     if (message.audio) {
@@ -528,6 +544,7 @@ async function playSpeech(
       }
     }
   } catch {
+    if (activeSpeech.current !== message.speech_id) return;
     activeSpeech.current = null;
     onFinished();
     send(socket, {

@@ -7,6 +7,10 @@ const mocks = vi.hoisted(() => ({
   capture: vi.fn(),
   stopCapture: vi.fn(),
   stopPlayback: vi.fn(),
+  speaking: false,
+  beginPcmStream: vi.fn(),
+  pushPcmChunk: vi.fn(),
+  playAudio: vi.fn(),
 }));
 
 class FakeSocket {
@@ -51,6 +55,12 @@ vi.mock("../audio", () => ({
     stopCapture = mocks.stopCapture;
     stopPlayback = mocks.stopPlayback;
     stopCue = vi.fn();
+    get participantSpeaking() {
+      return mocks.speaking;
+    }
+    beginPcmStream = mocks.beginPcmStream;
+    pushPcmChunk = mocks.pushPcmChunk;
+    playAudio = mocks.playAudio;
   },
 }));
 
@@ -74,12 +84,150 @@ beforeEach(() => {
   FakeSocket.instances = [];
   mocks.bootstrap.mockResolvedValue(payload);
   mocks.stopCapture.mockResolvedValue(undefined);
+  mocks.speaking = false;
 });
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("connection recovery", () => {
+  it("ignores a late stop for a previous speech", async () => {
+    const { unmount } = renderHook(() => useAtlas());
+    const socket = FakeSocket.instances[0];
+    await act(async () => {
+      await socket.open();
+    });
+    act(() => {
+      socket.receive({
+        type: "speech.authorized",
+        speech_id: "current",
+        text: "Answer",
+        audio: null,
+      });
+      socket.receive({
+        type: "speech.audio.chunk",
+        speech_id: "current",
+        data_base64: "AAA=",
+        sample_rate: 24000,
+      });
+    });
+    mocks.stopPlayback.mockClear();
+    act(() => {
+      socket.receive({ type: "speech.stop", speech_id: "previous" });
+      socket.receive({
+        type: "speech.audio.chunk",
+        speech_id: "current",
+        data_base64: "AAA=",
+        sample_rate: 24000,
+      });
+    });
+    expect(mocks.stopPlayback).not.toHaveBeenCalled();
+    expect(mocks.beginPcmStream).toHaveBeenCalledOnce();
+    unmount();
+  });
+
+  it("keeps a newer speech active when old audio decoding fails", async () => {
+    let reject!: (error: Error) => void;
+    mocks.playAudio.mockImplementationOnce(
+      () =>
+        new Promise<void>((_, fail) => {
+          reject = fail;
+        }),
+    );
+    const { unmount } = renderHook(() => useAtlas());
+    const socket = FakeSocket.instances[0];
+    await act(async () => {
+      await socket.open();
+    });
+    act(() => {
+      socket.receive({
+        type: "speech.authorized",
+        speech_id: "previous",
+        text: "Old",
+        audio: { data_base64: "AAA=", format: "opus", sample_rate: 24000 },
+      });
+      socket.receive({
+        type: "speech.authorized",
+        speech_id: "current",
+        text: "New",
+        audio: null,
+      });
+    });
+    await act(async () => {
+      reject(new Error("Decode failed"));
+    });
+    act(() => {
+      socket.receive({
+        type: "speech.audio.chunk",
+        speech_id: "current",
+        data_base64: "AAA=",
+        sample_rate: 24000,
+      });
+    });
+    expect(mocks.pushPcmChunk).toHaveBeenCalledOnce();
+    unmount();
+  });
+
+  it("rejects late speech authorization while a participant speaks", async () => {
+    const { unmount } = renderHook(() => useAtlas());
+    const socket = FakeSocket.instances[0];
+    await act(async () => {
+      await socket.open();
+    });
+    mocks.speaking = true;
+    act(() => {
+      socket.receive({
+        type: "speech.authorized",
+        speech_id: "late",
+        text: "Late answer",
+        audio: null,
+      });
+      socket.receive({
+        type: "speech.audio.chunk",
+        speech_id: "late",
+        data_base64: "AAA=",
+        sample_rate: 24000,
+      });
+    });
+    expect(socket.sent).toContainEqual({
+      type: "playback.interrupted",
+      speech_id: "late",
+    });
+    expect(mocks.beginPcmStream).not.toHaveBeenCalled();
+    expect(mocks.pushPcmChunk).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("rejects a first chunk when a participant starts after authorization", async () => {
+    const { unmount } = renderHook(() => useAtlas());
+    const socket = FakeSocket.instances[0];
+    await act(async () => {
+      await socket.open();
+    });
+    act(() => {
+      socket.receive({
+        type: "speech.authorized",
+        speech_id: "late",
+        text: "Late answer",
+        audio: null,
+      });
+    });
+    mocks.speaking = true;
+    act(() => {
+      socket.receive({
+        type: "speech.audio.chunk",
+        speech_id: "late",
+        data_base64: "AAA=",
+        sample_rate: 24000,
+      });
+    });
+    expect(socket.sent).toContainEqual({
+      type: "playback.interrupted",
+      speech_id: "late",
+    });
+    expect(mocks.pushPcmChunk).not.toHaveBeenCalled();
+    unmount();
+  });
   it("refreshes authentication and preserves the draft without resuming capture", async () => {
     const { result, unmount } = renderHook(() => useAtlas());
     const first = FakeSocket.instances[0];

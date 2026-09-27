@@ -16,7 +16,7 @@ class AppSettings(BaseSettings):
     gradium_api_key: SecretStr = SecretStr("")
     gradium_voice_id: str = "b35yykvVppLXyw_l"
     gradium_stt_language: Literal["fr", "en", "de", "es", "pt", "any"] = "fr"
-    gradium_stt_delay_frames: Literal[7, 8, 10, 12, 14, 16, 20, 24, 32, 36, 48] = 12
+    gradium_stt_delay_frames: Literal[7, 8, 10, 12, 14, 16, 20, 24, 32, 36, 48] = 16
     dust_api_key: SecretStr = SecretStr("")
     dust_workspace_id: str = ""
     dust_domain: str = "https://dust.tt"

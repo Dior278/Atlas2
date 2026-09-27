@@ -34,7 +34,7 @@ from .notes import integrate_task_finding, normalize_notes, render_notes
 from .ports import DecisionPort, Publish, StorePort, STTPort, TTSPort
 from .speaker import SpeakerAgent
 from .speech import SpeechGate
-from .voice import spoken_segments, spoken_text
+from .voice import bounded_spoken_turn, spoken_segments, spoken_text
 
 logger = logging.getLogger("uvicorn.error").getChild("pipeline")
 
@@ -450,6 +450,7 @@ class AtlasEngine:
             participant_id="renard" if source == "manual" else "",
         )
         self.state.room_epoch += 1
+        self._last_floor_change = monotonic()
         room_epoch = self.state.room_epoch
         self.state.partial = ""
         self.state.transcript.append(utterance)
@@ -471,20 +472,13 @@ class AtlasEngine:
         self._last_floor_change = monotonic()
         self._floor_changed_event.set()
         if busy:
+            speech_id = self._active_speech_id
+            await self._interrupt_playback("barge_in")
             await self._cancel_direct_speech("barge_in")
-            for speech in reversed(self.state.speeches):
-                if speech.status in {"authorized", "playing"}:
-                    speech.status = "interrupted"
-                    self._active_speech_id = None
-                    self._playback_idle.set()
-                    await self.publish(
-                        {
-                            "type": "speech.stop",
-                            "speech_id": speech.id,
-                            "reason": "barge_in",
-                        }
-                    )
-                    break
+            if speech_id in self._delivery_jobs:
+                _, job = self._delivery_jobs[speech_id]
+                job.cancel()
+                await asyncio.gather(job, return_exceptions=True)
         else:
             await self.stt.flush()
         await self._broadcast_state()
@@ -496,8 +490,16 @@ class AtlasEngine:
         status = "playing" if status == "started" else status
         if speech is None or status not in {"playing", "finished", "interrupted"}:
             return
-        if speech.status in {"failed", "canceled", "suppressed", "expired"}:
+        if speech.status in {
+            "failed",
+            "canceled",
+            "suppressed",
+            "expired",
+            "interrupted",
+            "finished",
+        }:
             return
+        was_active = self._active_speech_id == speech_id
         speech.status = status  # type: ignore[assignment]
         if status == "playing":
             speech.playback_started_at = speech.playback_started_at or now_iso()
@@ -510,6 +512,13 @@ class AtlasEngine:
             self._active_speech_id = None
             self._playback_idle.set()
         await self._commit("playback", f"{status}: {speech.text}")
+        if status == "interrupted":
+            if speech_id in self._delivery_jobs:
+                _, job = self._delivery_jobs[speech_id]
+                job.cancel()
+                await asyncio.gather(job, return_exceptions=True)
+            if was_active and speech.reason in {"direct_address", "awaited_response"}:
+                await self._cancel_direct_speech("barge_in")
 
     async def _interrupt_playback(self, reason: str) -> None:
         speech_id = self._active_speech_id
@@ -529,7 +538,13 @@ class AtlasEngine:
 
     async def drain(self) -> None:
         while self._background:
-            await asyncio.gather(*tuple(self._background), return_exceptions=True)
+            # gather() on already completed tasks may return without yielding;
+            # their scheduled discard callbacks must not cause a busy loop.
+            completed = {task for task in self._background if task.done()}
+            self._background.difference_update(completed)
+            pending = tuple(self._background)
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
 
     async def _process_turn(self, utterance: Utterance, room_epoch: int) -> None:
         session_id = self.state.session_id
@@ -579,7 +594,8 @@ class AtlasEngine:
         await self._activity("decided", f"{decision.route}: {decision.rationale}")
         await self._broadcast_state()
 
-        await self._cancel_direct_speech("new_room_turn")
+        if room_epoch == self.state.room_epoch:
+            await self._cancel_direct_speech("new_room_turn")
         if decision.memory == "capture" or decision.route in {
             "investigate",
             "act",
@@ -588,12 +604,10 @@ class AtlasEngine:
             self._notes_dirty = True
             self._notes_kick.set()
 
-        addressed_strictly = decision.addressee in {"atlas", "room"}
         mission_authorized = decision.route in {"investigate", "act"}
         if (
-            addressed_strictly
-            and decision.speech_depth != "silent"
-            and decision.route in {"respond", "control"}
+            self._gate.response_reason(decision) is not None
+            and room_epoch == self.state.room_epoch
         ):
             task = self._spawn(
                 self._speaker_turn(utterance, decision, session_id, room_epoch),
@@ -632,7 +646,22 @@ class AtlasEngine:
         try:
             if mission_task.status == "canceled":
                 return
-            if decision.initiative == "assigned":
+            speech_requested = (
+                decision.speech_depth != "silent"
+                and decision.timing != "silent"
+                and (
+                    (
+                        decision.initiative == "assigned"
+                        and decision.addressee == "atlas"
+                    )
+                    or (
+                        decision.initiative == "proactive"
+                        and decision.addressee == "room"
+                        and decision.timing == "later"
+                    )
+                )
+            )
+            if decision.initiative == "assigned" and speech_requested:
                 acknowledgement = self._spawn(
                     self._acknowledge_mission(mission_task, session_id), speech=True
                 )
@@ -693,8 +722,14 @@ class AtlasEngine:
                 if mission_succeeded:
                     mission_task.phase = "reporting"
                     await self._upsert_task(mission_task, report=False)
-                if mission_task.status != "canceled":
-                    await self._speaker_task(mission_task, session_id)
+                if mission_task.status != "canceled" and speech_requested:
+                    await self._speaker_task(
+                        mission_task,
+                        session_id,
+                        reason="requested_result"
+                        if decision.initiative == "assigned"
+                        else "awaited_response",
+                    )
                 if mission_succeeded:
                     mission_task.status = "done"
                     mission_task.phase = "complete"
@@ -778,8 +813,17 @@ class AtlasEngine:
         session_id: str | None,
         room_epoch: int,
     ) -> None:
+        reason = self._gate.response_reason(decision)
+        if reason is None:
+            return
+        if reason == "awaited_response":
+            decision = decision.model_copy(update={"speech_depth": "brief"})
         run = await self._start_agent("speaker", f"Responding: {utterance.text[:80]}")
-        if not self.state.floor_busy and self.state.voice_mode == "active":
+        if (
+            reason == "direct_address"
+            and not self.state.floor_busy
+            and self.state.voice_mode == "active"
+        ):
             self._spawn(
                 self._publish_presence_cue(run.id, f"Thinking: {utterance.text[:80]}"),
                 speech=True,
@@ -810,9 +854,7 @@ class AtlasEngine:
             if not result.speak:
                 await self._commit("speaker.veto", "Atlas chose not to speak")
                 return
-            await self._offer_speaker_text(
-                result.spoken_core, "direct_address", [utterance.id]
-            )
+            await self._offer_speaker_text(result.spoken_core, reason, [utterance.id])
         except asyncio.CancelledError:
             await self._finish_agent(run, "canceled", "superseded_by_new_turn")
             raise
@@ -855,7 +897,7 @@ class AtlasEngine:
                 return
             speech = Speech(
                 text="",
-                reason="direct_address",
+                reason=self._gate.response_reason(decision) or "direct_address",
                 source_ids=[utterance.id],
                 room_epoch=room_epoch,
             )
@@ -932,29 +974,6 @@ class AtlasEngine:
                 task.add_done_callback(self._background.discard)
                 task.add_done_callback(self._speech_tasks.discard)
 
-            while self.state.floor_busy or (
-                monotonic() - self._last_floor_change
-                < self.config.policy.direct_floor_gap_seconds
-            ):
-                if (
-                    self.state.room_epoch != room_epoch
-                    or not self._session_accepts_results(session_id)
-                ):
-                    speaker_task.cancel()
-                    tts_task.cancel()
-                    raise asyncio.CancelledError
-                self._floor_changed_event.clear()
-                with suppress(TimeoutError):
-                    await asyncio.wait_for(
-                        self._floor_changed_event.wait(), timeout=0.1
-                    )
-            if (
-                not self._session_accepts_results(session_id)
-                or self.state.room_epoch != room_epoch
-            ):
-                speaker_task.cancel()
-                tts_task.cancel()
-                return
             first_chunk = await audio_queue.get()
             if first_chunk is None:
                 await asyncio.gather(speaker_task, tts_task)
@@ -962,9 +981,26 @@ class AtlasEngine:
                 await self.store.save(self.state)
                 await self._broadcast_state()
                 return
+            if speech.reason == "awaited_response":
+                blocked = self._gate.validate(speech)
+                if blocked:
+                    speech.status, speech.error = "suppressed", blocked
+                    speaker_task.cancel()
+                    tts_task.cancel()
+                    await asyncio.gather(speaker_task, tts_task, return_exceptions=True)
+                    await self._broadcast_state()
+                    return
+            if not await self._wait_for_speech_gap(speech, session_id):
+                speaker_task.cancel()
+                tts_task.cancel()
+                await asyncio.gather(speaker_task, tts_task, return_exceptions=True)
+                await self.store.save(self.state)
+                await self._broadcast_state()
+                return
             speech.status = "authorized"
             self._active_speech_id = speech.id
             self._playback_idle.clear()
+            self._gate.delivered(speech)
             await self.publish(
                 {
                     "type": "speech.authorized",
@@ -1005,7 +1041,6 @@ class AtlasEngine:
                 sequence += 1
             await asyncio.gather(speaker_task, tts_task)
             self.state.health["tts"] = Health(status="ok")
-            self._gate.delivered(speech)
             await self.store.save(self.state)
             await self.publish({"type": "speech.audio.end", "speech_id": speech.id})
             await self.publish(
@@ -1018,7 +1053,15 @@ class AtlasEngine:
             )
             await self._broadcast_state()
 
-    async def _speaker_task(self, task: Task, session_id: str | None) -> None:
+    async def _speaker_task(
+        self,
+        task: Task,
+        session_id: str | None,
+        *,
+        reason: Literal[
+            "requested_result", "awaited_response", "critical_finding"
+        ] = "requested_result",
+    ) -> None:
         if task.status == "canceled":
             return
         run = await self._start_agent("speaker", f"Reporting: {task.summary[:80]}")
@@ -1043,9 +1086,7 @@ class AtlasEngine:
                 return
             await self._finish_agent(run, "done")
             if result.speak and self.state.room_epoch == epoch:
-                await self._offer_speaker_text(
-                    result.spoken_core, "requested_result", [task.id]
-                )
+                await self._offer_speaker_text(result.spoken_core, reason, [task.id])
         except asyncio.CancelledError:
             await self._finish_agent(run, "canceled", "interrupted")
             raise
@@ -1086,10 +1127,14 @@ class AtlasEngine:
     async def _offer_speaker_text(
         self,
         text: str,
-        reason: Literal["direct_address", "requested_result", "critical_finding"],
+        reason: Literal[
+            "direct_address", "awaited_response", "requested_result", "critical_finding"
+        ],
         source_ids: list[str],
     ) -> None:
         natural_speech = spoken_text(text)
+        if reason == "awaited_response":
+            natural_speech = bounded_spoken_turn(natural_speech, 2)
         if not natural_speech:
             return
         speech = Speech(
@@ -1120,7 +1165,8 @@ class AtlasEngine:
         )
         detail = self._safe_error(error)
         if speech is not None:
-            speech.status = status
+            if status == "failed" or speech.status != "interrupted":
+                speech.status = status
             speech.error = detail
             await self.publish(
                 {"type": "speech.stop", "speech_id": speech.id, "reason": reason}
@@ -1136,8 +1182,11 @@ class AtlasEngine:
             )
         self._active_speech_id = None
         self._playback_idle.set()
-        self.state.health["tts"] = Health(status="down", detail=detail)
-        await self._commit("speech.failed", detail)
+        if status == "failed":
+            self.state.health["tts"] = Health(status="down", detail=detail)
+        await self._commit(
+            "speech.failed" if status == "failed" else "speech.canceled", detail
+        )
 
     async def _apply_control(self, control: str) -> bool:
         if control == "mute":
@@ -1274,6 +1323,42 @@ class AtlasEngine:
             )
         self.state.cards = self.state.cards[-100:]
 
+    async def _wait_for_speech_gap(
+        self, speech: Speech, session_id: str | None
+    ) -> bool:
+        """Authorize only after audio is ready and a continuous human silence."""
+        required_gap = {
+            "direct_address": self.config.policy.direct_floor_gap_seconds,
+            "awaited_response": self.config.policy.awaited_floor_gap_seconds,
+        }.get(speech.reason, self.config.policy.stable_floor_gap_seconds)
+        deadline = monotonic() + 45
+        while True:
+            if (
+                not self._session_accepts_results(session_id)
+                or self.state.voice_mode == "muted"
+                or speech.status in {"interrupted", "canceled"}
+                or (
+                    speech.reason in {"direct_address", "awaited_response"}
+                    and speech.room_epoch != self.state.room_epoch
+                )
+            ):
+                speech.status = "canceled"
+                speech.error = "conversation_changed"
+                return False
+            if (
+                self._playback_idle.is_set()
+                and not self.state.floor_busy
+                and monotonic() - self._last_floor_change >= required_gap
+            ):
+                return True
+            if monotonic() >= deadline:
+                speech.status = "expired"
+                speech.error = "no_conversation_gap"
+                return False
+            self._floor_changed_event.clear()
+            with suppress(TimeoutError):
+                await asyncio.wait_for(self._floor_changed_event.wait(), timeout=0.05)
+
     async def _deliver(self, speech: Speech) -> None:
         try:
             await self._deliver_inner(speech)
@@ -1369,34 +1454,6 @@ class AtlasEngine:
             self._speech_tasks.add(tts_task)
             tts_task.add_done_callback(self._background.discard)
             tts_task.add_done_callback(self._speech_tasks.discard)
-            required_gap = (
-                self.config.policy.direct_floor_gap_seconds
-                if speech.reason == "direct_address"
-                else 0.6
-            )
-            gap_timeout = 2.5 if speech.reason != "direct_address" else 4.0
-            start_wait = monotonic()
-            while True:
-                quiet_for = monotonic() - self._last_floor_change
-                elapsed = monotonic() - start_wait
-                # Speak after a natural gap, or after the bounded wait if the room is currently quiet.
-                if (not self.state.floor_busy and quiet_for >= required_gap) or (
-                    not self.state.floor_busy and elapsed >= gap_timeout
-                ):
-                    break
-                if not self._session_accepts_results(self.state.session_id):
-                    speech.status = "canceled"
-                    speech.error = "Session no longer accepts speech"
-                    tts_task.cancel()
-                    return
-                await asyncio.sleep(0.05)
-            # Requested results survive later room turns. Session closure still cancels them.
-            if not self._session_accepts_results(self.state.session_id):
-                tts_task.cancel()
-                speech.status = "canceled"
-                speech.error = "Session closed before playback"
-                await self._commit("speech.canceled", speech.error)
-                return
             first_chunk = await audio_queue.get()
             if first_chunk is None:
                 await tts_task
@@ -1407,6 +1464,11 @@ class AtlasEngine:
                 speech.error = detail
                 self.state.health["tts"] = Health(status="down", detail=detail)
                 await self._commit("speech.failed", detail)
+                return
+            if not await self._wait_for_speech_gap(speech, self.state.session_id):
+                tts_task.cancel()
+                await self.store.save(self.state)
+                await self._broadcast_state()
                 return
             speech.status = "authorized"
             self._active_speech_id = speech.id

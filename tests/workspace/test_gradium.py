@@ -95,6 +95,59 @@ async def test_stt_accumulates_fragments_until_flush(
 
 
 @pytest.mark.asyncio
+async def test_stt_keeps_successive_flushed_turns_separate(monkeypatch):
+    monkeypatch.setenv("GRADIUM_API_KEY", "test")
+    stt = GradiumSTT(
+        STTModelConfig(
+            id="gradium/default",
+            endpoint="wss://example.test",
+            secret_env="GRADIUM_API_KEY",
+        )
+    )
+    finals = []
+
+    async def final(text):
+        finals.append(text)
+
+    stt._on_final = final
+    try:
+        await stt._handle_message({"type": "text", "text": "Le prototype est prêt."})
+        await stt._handle_message({"type": "flushed", "flush_id": 1})
+        await stt._handle_message(
+            {"type": "text", "text": "La date reste à confirmer."}
+        )
+        await stt._handle_message({"type": "flushed", "flush_id": 2})
+        assert finals == ["Le prototype est prêt.", "La date reste à confirmer."]
+    finally:
+        await stt.stop()
+
+
+@pytest.mark.asyncio
+async def test_stt_preserves_final_words_when_provider_ends_stream(monkeypatch):
+    monkeypatch.setenv("GRADIUM_API_KEY", "test")
+    stt = GradiumSTT(
+        STTModelConfig(
+            id="gradium/default",
+            endpoint="wss://example.test",
+            secret_env="GRADIUM_API_KEY",
+        )
+    )
+    finals = []
+
+    async def final(text):
+        finals.append(text)
+
+    stt._on_final = final
+    try:
+        await stt._handle_message({"type": "text", "text": "Dernière précision."})
+        assert not await stt._handle_message({"type": "end_of_stream"})
+        assert not await stt._handle_message({"type": "end_of_stream"})
+        assert finals == ["Dernière précision."]
+    finally:
+        await stt.stop()
+
+
+@pytest.mark.asyncio
 async def test_tts_does_not_synthesize_a_flush_marker_without_spoken_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

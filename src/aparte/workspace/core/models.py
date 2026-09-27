@@ -103,7 +103,9 @@ class Task(DomainModel):
 class Speech(DomainModel):
     id: str = Field(default_factory=lambda: new_id("say"))
     text: str
-    reason: Literal["direct_address", "requested_result", "critical_finding"]
+    reason: Literal[
+        "direct_address", "awaited_response", "requested_result", "critical_finding"
+    ]
     status: Literal[
         "proposed",
         "waiting_gap",

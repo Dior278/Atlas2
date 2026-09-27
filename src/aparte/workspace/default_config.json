@@ -8,8 +8,9 @@
     "notes_interval_seconds": 20
   },
   "policy": {
-    "stable_floor_gap_seconds": 0.8,
-    "direct_floor_gap_seconds": 0.3,
+    "stable_floor_gap_seconds": 1.5,
+    "direct_floor_gap_seconds": 0.8,
+    "awaited_floor_gap_seconds": 3.0,
     "unsolicited_speech_cooldown_seconds": 90,
     "research_max_concurrency": 3,
     "max_tool_steps": 4

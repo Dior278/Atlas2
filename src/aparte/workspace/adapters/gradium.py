@@ -41,7 +41,6 @@ class GradiumSTT:
         self._on_final: TextCallback | None = None
         self._on_event: EventCallback | None = None
         self._fragments: list[str] = []
-        self._finalizer: asyncio.Task[None] | None = None
         self._flush_counter = 0
         self._flush_pending = False
         self._quiet_steps = 0
@@ -129,11 +128,6 @@ class GradiumSTT:
             with suppress(asyncio.CancelledError, Exception):
                 await self._consumer
             self._consumer = None
-        if self._finalizer is not None:
-            self._finalizer.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._finalizer
-            self._finalizer = None
         self._fragments.clear()
         self._flush_pending = False
         self._quiet_steps = 0
@@ -156,8 +150,8 @@ class GradiumSTT:
             if fragment:
                 self._fragments.append(fragment)
                 logger.info(
-                    "stt.fragment text=%r accumulated=%d",
-                    fragment,
+                    "stt.fragment length=%d accumulated=%d",
+                    len(fragment),
                     len(self._fragments),
                 )
                 self._quiet_steps = 0
@@ -172,11 +166,12 @@ class GradiumSTT:
                 len(self._fragments),
             )
             self._flush_pending = False
-            if self._finalizer is not None:
-                self._finalizer.cancel()
-            self._finalizer = asyncio.create_task(
-                self._finalize_after_trailing_tokens()
-            )
+            # Gradium sends all text preceding this boundary before 'flushed'.
+            # Waiting here can merge the next speaker's words into this turn.
+            await self._finalize_pending()
+        elif kind == "end_of_stream":
+            await self._finalize_pending()
+            return False
         return kind != "error"
 
     async def _handle_vad(self, message: dict[str, Any]) -> None:
@@ -199,12 +194,12 @@ class GradiumSTT:
             self._quiet_steps = 0
             await self.flush()
 
-    async def _finalize_after_trailing_tokens(self) -> None:
-        await asyncio.sleep(0.15)
+    async def _finalize_pending(self) -> None:
         final = " ".join(self._fragments).strip()
         self._fragments.clear()
+        self._quiet_steps = 0
         if final and self._on_final is not None:
-            logger.info("stt.final text=%r", final)
+            logger.info("stt.final length=%d", len(final))
             await self._on_final(final)
 
     async def _emit_event(self, kind: str, message: dict[str, Any]) -> None:

@@ -5,6 +5,24 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class PromptCatalog:
+    turn_taking_template: str = (
+        "Speaking permission is separate from doing useful background work. "
+        "For a clear handoff ('Atlas, à toi', 'on te laisse la parole') or an explicit question "
+        "to {companion_name}, choose addressee=atlas, initiative=assigned, timing=next_gap and "
+        "non-silent speech_depth. The name need not be repeated when the context clearly addresses the AI. "
+        "A question to a named human, a rhetorical question, a quotation, a mention of the AI, "
+        "thinking aloud, or 'attends, je n’ai pas fini' does not give permission to speak. "
+        "For ordinary discussion choose capture, speech_depth=silent, timing=silent. "
+        "An expressed unresolved request for help or an unanswered open question can invite a brief "
+        "contribution without naming the AI: only when context shows the group awaits help, choose "
+        "addressee=room, initiative=proactive, speech_depth=brief, timing=later. "
+        "Use respond for a conversational contribution, investigate only when external evidence is needed. "
+        "The runtime waits for sustained silence and cancels if a participant resumes. Silence alone, "
+        "frustration alone, or a finished thought never establishes an expectation of help. "
+        "Check recent human answers and completed AI speech; do not answer a question already resolved. "
+        "If the intended addressee or expectation is unclear, remain silent. Explicit requests for silent "
+        "work require speech_depth=silent and timing=silent, including acknowledgements and results."
+    )
     identity_template: str = (
         "You are {companion_name}, one unified ambient collaborator. Participants experience one coherent "
         "{companion_name}, not separate internal agents, models, providers, or tools. Speak and act in the "
@@ -22,7 +40,10 @@ class PromptCatalog:
         "to another "
         "participant, merely mentions {companion_name}, or has no useful response, output exactly <SILENT>. "
         "Otherwise "
-        "respond immediately as natural spoken prose in the session language. Use shared memory faithfully. "
+        "respond as natural spoken prose in the session language. Use shared memory faithfully. "
+        "For addressee=room, initiative=proactive, timing=later, independently verify that participants "
+        "expressed an unresolved need and are awaiting help. Mere silence or discussion is insufficient; "
+        "output <SILENT> in doubt. If useful, contribute at most two short sentences without a monologue. "
         "The decision includes speech_depth. For brief, give one or two short complete sentences. "
         "For normal, "
         "give two to four concise sentences. For deep, answer substantially but finish one coherent spoken "
@@ -140,6 +161,9 @@ class PromptCatalog:
     def identity(self, companion_name: str) -> str:
         return self.identity_template.format(companion_name=companion_name)
 
+    def turn_taking(self, companion_name: str) -> str:
+        return self.turn_taking_template.format(companion_name=companion_name)
+
     def speaker_stream(self, companion_name: str) -> str:
         return self.speaker_stream_template.format(
             identity=self.identity(companion_name), companion_name=companion_name
@@ -178,8 +202,7 @@ class PromptCatalog:
             identity=self.identity(companion_name), schema=schema
         )
 
-    @staticmethod
-    def jev_questions(companion_name: str) -> dict[str, object]:
+    def jev_questions(self, companion_name: str) -> dict[str, object]:
         return {
             "addressee": {
                 "type": "choice",
@@ -217,7 +240,8 @@ class PromptCatalog:
                     "Investigate must be chosen whether the request is explicitly commanded to the companion "
                     "(initiative=assigned) or emerged as an unassigned evidence need during discussion "
                     "(initiative=proactive). "
-                    "Choose respond for conversational replies or status queries; act for external actions; "
+                    "Choose respond for a clear invitation to speak, explicit questions, or a brief contribution "
+                    "to an expressed unresolved need under the speaking-permission rules; act for external actions; "
                     "control for state changes (mute, pause, stop); capture for silent notes updates; "
                     "ignore only for pure noise or irrelevant filler."
                 ),
@@ -227,7 +251,7 @@ class PromptCatalog:
                     "investigate": (
                         "Run an external information or verification mission through the registered tools"
                     ),
-                    "respond": "Direct conversational answer, greeting, or status report",
+                    "respond": "Invited answer, explicit question, or help the group is clearly awaiting",
                     "act": "Execute an external side-effecting action",
                     "control": f"Change {companion_name} operational state",
                 },
@@ -252,6 +276,10 @@ class PromptCatalog:
                     "something. Choose proactive when participants express a clear need for external data, "
                     "fact-checking, or background information, "
                     "even without naming the AI directly, or when an evidence gap blocks the discussion. "
+                    "Also choose proactive when the group clearly awaits help with an unresolved open "
+                    "question or a suggestion for how to proceed, even if no external facts are needed. "
+                    "For example, 'On attend une suggestion de méthode, quelqu’un peut nous aider ?' "
+                    "is proactive, not none. This is distinct from ordinary opinions or a pause. "
                     "Choose none for human-only opinions, agreements, or completed thoughts."
                 ),
                 "criteria": {
@@ -266,6 +294,12 @@ class PromptCatalog:
                 "type": "choice",
                 "instructions": (
                     "Choose the useful depth of one spoken turn. Use silent when no speech is warranted, "
+                    "including human-to-human questions, mere AI mentions, or an unfinished thought. "
+                    "Use brief when the group expresses an unresolved expectation of help or a suggestion; "
+                    "the runtime will wait for sustained silence. "
+                    "A contextual follow-up to the AI such as 'Et laquelle recommandes-tu ?' calls for "
+                    "brief or normal speech even without repeating its name. A clear invitation to speak "
+                    "or a question to the AI should not be classified silent unless silent work was requested. "
                     "brief for acknowledgements and status, normal for ordinary answers, and deep only when "
                     "participants "
                     "explicitly request a detailed spoken explanation."
@@ -274,20 +308,16 @@ class PromptCatalog:
                     "silent": "No spoken turn",
                     "brief": "One or two short sentences",
                     "normal": "Two to four concise sentences",
-                    "deep": "A substantial but bounded spoken explanation",
+                    "deep": "Only an explicitly requested detailed spoken explanation; a handoff alone is not deep",
                 },
             },
             "timing": {
                 "type": "choice",
-                "instructions": (
-                    f"Choose silent if {companion_name} should not speak, next_gap if a prepared response "
-                    f"remains useful at the next natural pause, or later if {companion_name} should wait "
-                    "for work or context."
-                ),
+                "instructions": (self.turn_taking(companion_name)),
                 "criteria": {
                     "silent": "Do not schedule speech",
-                    "next_gap": "Speak at the next natural opening",
-                    "later": "Wait for work or context before reconsidering",
+                    "next_gap": "An explicit invitation or question permits speech after the human finishes",
+                    "later": "An expressed unresolved need permits a brief contribution after sustained silence",
                 },
             },
         }

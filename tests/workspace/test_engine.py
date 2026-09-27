@@ -593,7 +593,7 @@ async def test_response_to_another_person_does_not_start_speaker() -> None:
 
 
 @pytest.mark.asyncio
-async def test_response_offered_to_room_can_start_speaker_as_a_room_member() -> None:
+async def test_response_offered_to_room_leaves_the_floor_to_participants() -> None:
     published: list[dict[str, object]] = []
     decision = SequenceDecision(
         [
@@ -611,7 +611,7 @@ async def test_response_offered_to_room_can_start_speaker_as_a_room_member() -> 
     await engine.start_session({})
     await engine.commit_utterance("What does everyone think?", source="manual")
     await engine.drain()
-    assert any(run.agent == "speaker" for run in engine.state.agent_runs)
+    assert not any(run.agent == "speaker" for run in engine.state.agent_runs)
     await engine.stop()
 
 
@@ -671,9 +671,12 @@ async def test_addressed_research_runs_speaker_and_worker_in_parallel() -> None:
 
 
 @pytest.mark.asyncio
-async def test_proactive_semantic_investigation_runs_worker_without_assignment_ack() -> (
-    None
-):
+@pytest.mark.parametrize(
+    "initiative,addressee", [("proactive", "room"), ("assigned", "atlas")]
+)
+async def test_silent_investigation_runs_worker_without_spoken_ack_or_report(
+    initiative, addressee
+) -> None:
     published: list[dict[str, object]] = []
     tools = ToolRegistry(1)
 
@@ -697,9 +700,9 @@ async def test_proactive_semantic_investigation_runs_worker_without_assignment_a
         [
             Decision(
                 route="investigate",
-                addressee="room",
+                addressee=addressee,
                 memory="capture",
-                initiative="proactive",
+                initiative=initiative,
                 speech_depth="silent",
                 timing="later",
             )
@@ -715,7 +718,7 @@ async def test_proactive_semantic_investigation_runs_worker_without_assignment_a
     await engine.drain()
     assert any(run.agent == "worker" for run in engine.state.agent_runs)
     assert engine.state.tasks[-1].status == "done"
-    assert not any(speech.reason == "task_started" for speech in engine.state.speeches)
+    assert not any(message.get("type") == "speech.authorized" for message in published)
     await engine.stop()
 
 

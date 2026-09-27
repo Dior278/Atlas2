@@ -27,7 +27,11 @@ export function MeetingAudioSetup() {
         <Volume2 size={16} /> Faire entendre Atlas dans l’appel
       </summary>
       <div className="meeting-audio-body">
-        <p>Deux partages, chacun dans un sens. Utilisez un casque.</p>
+        <p>
+          Vous entendez Atlas sur cet ordinateur. Pour le faire entendre aux
+          participants, activez aussi le partage de son dans la réunion.
+          Utilisez un casque.
+        </p>
         <ol>
           <li>
             <strong>L’appel → Atlas.</strong> Choisissez « Microphone + audio
@@ -35,9 +39,10 @@ export function MeetingAudioSetup() {
             son audio.
           </li>
           <li>
-            <strong>Atlas → l’appel.</strong> Dans Meet ou Teams sur le web,
-            cliquez sur Présenter ou Partager. Sélectionnez l’onglet Atlas et
-            activez le partage de l’audio de cet onglet.
+            <strong>Atlas → l’appel.</strong> Dans Teams sur le web : Partager →
+            Écran, fenêtre ou onglet → Onglet. Sélectionnez Atlas2 et activez «
+            Partager aussi l’audio de l’onglet ». Dans Meet : Présenter → Un
+            onglet, avec son audio.
           </li>
           <li>
             <strong>Vérifiez ensemble.</strong> Jouez le son ci-dessous et
