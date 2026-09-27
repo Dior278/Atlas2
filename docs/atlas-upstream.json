@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/KpihX/atlas",
+  "branch": "kpihx-ubuntu",
+  "previous_commit": "db21374ef9307eb0dc049bf99a31a5f9b834530a",
+  "integrated_commit": "4e0823f8f4350978d94a69d3e16fa06c2b3584fa",
+  "verified_date": "2026-09-27",
+  "strategy": "three-way source integration; local consent, evidence, persistence and UI preserved"
+}

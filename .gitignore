@@ -1,0 +1,39 @@
+# Local credentials and environment
+.env
+.env.*
+!.env.example
+.[Ss]ecret*
+*.pem
+*.key
+
+# Python and build outputs
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local tools, recordings, diagnostic output and scratch work
+/tmp/
+/release/
+/MANIFEST.sha256
+/.data/
+node_modules/
+frontend/dist/
+*.log
+
+# Editors and operating system
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+*.bak

@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+import json
+
+from aparte.workspace.config import AppConfig, default_config_text
+
+
+def test_closed_llm_matrix_and_openai_default() -> None:
+    config = AppConfig.model_validate(json.loads(default_config_text()))
+    assert config.llm.roles.speaker == "openai/gpt-5-mini"
+    assert config.llm.roles.worker == "openai/gpt-4.1-mini"
+    assert config.llm.roles.notes == "openai/gpt-4.1-mini"
+    assert config.llm.roles.naming == "openai/gpt-4.1-nano"
+    assert config.llm.roles.fallback == "opencode-zen/muse-spark-1.3"
+    assert {
+        (item.provider, item.model, item.transport) for item in config.llm.models
+    } == {
+        ("openai", "gpt-5.6-luna", "responses"),
+        ("openai", "gpt-5-mini", "responses"),
+        ("openai", "gpt-4.1-mini", "responses"),
+        ("openai", "gpt-4.1-nano", "responses"),
+        ("opencode-zen", "deepseek-v4-flash", "chat_completions"),
+        ("opencode-zen", "deepseek-v4.1-flash", "chat_completions"),
+        ("opencode-zen", "muse-spark-1.3", "responses"),
+    }
+
+
+def test_initial_tools_are_exa_and_jinko() -> None:
+    config = AppConfig.model_validate(json.loads(default_config_text()))
+    assert config.tools.exa.secret_env == "EXA_API_KEY"
+    assert config.tools.jinko.secret_env == "JINKO_API_KEY"
+
+
+def test_voice_registries_use_openai_and_keep_gradium_switchable() -> None:
+    config = AppConfig.model_validate(json.loads(default_config_text()))
+    assert config.voice.stt.active == "gradium/default"
+    assert [item.id for item in config.voice.stt.ordered()] == [
+        "gradium/default",
+        "openai/gpt-4o-mini-transcribe",
+    ]
+    assert config.voice.tts.active == "gradium/default"
+    assert [item.id for item in config.voice.tts.ordered()] == [
+        "gradium/default",
+        "openai/gpt-4o-mini-tts",
+    ]
+
+
+def test_old_voice_config_loads_without_overwriting_user_file(tmp_path):
+    from aparte.workspace.config import load_config
+
+    raw = json.loads(default_config_text())
+    for kind in ("stt", "tts"):
+        old = next(
+            p for p in raw["voice"][kind]["providers"] if p["provider"] == "gradium"
+        )
+        old.pop("id")
+        raw["voice"][kind] = old
+    raw["voice"]["tts"]["voice_id"] = "custom-voice"
+    path = tmp_path / "config.json"
+    original = json.dumps(raw)
+    path.write_text(original, encoding="utf-8")
+    config = load_config(path)
+    assert config.voice.tts.ordered()[0].voice_id == "custom-voice"
+    assert len(config.voice.tts.providers) == 1
+    assert path.read_text(encoding="utf-8") == original

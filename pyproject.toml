@@ -1,0 +1,52 @@
+[project]
+name = "aparte"
+version = "0.4.0"
+description = "Atlas2: an ambient meeting companion with verified commitments"
+readme = "README.md"
+authors = [
+    { name = "KAMDEM POUOKAM Ivann Harold", email = "kapoivha@gmail.com" },
+    { name = "Dehayem Kenfouo Sylvain" },
+    { name = "Wadoh Tchinda Pavel" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "python-dotenv>=1.0.1",
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.34,<1",
+    "websockets>=14,<16",
+    "pipelex-sdk>=0.12.0",
+    "aiosqlite>=0.21,<1",
+    "pyyaml>=6,<7",
+]
+
+[project.scripts]
+aparte = "aparte.app:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+browser = ["playwright>=1.58,<2"]
+dev = [
+    "pytest>=8.3.0",
+    "ruff>=0.8.0",
+    "pytest-asyncio>=1.2,<2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py312"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["aparte"]

@@ -1,0 +1,37 @@
+name: Quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.19"
+          python-version: "3.12"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24.21.0"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+      - name: Install and build from the lockfiles
+        run: uv run --locked python scripts/project.py setup
+      - name: Tests, style, build, protocol and source hygiene
+        run: uv run --locked python scripts/project.py check
+      - name: Install Chromium
+        run: uv run --locked --group browser playwright install --with-deps chromium
+      - name: Browser acceptance with synthetic providers
+        run: uv run --locked --group browser python scripts/check_atlas_browser.py
+      - name: Verify source archive generation
+        run: uv run --locked python scripts/release.py
